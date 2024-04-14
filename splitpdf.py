@@ -9,16 +9,16 @@ import time
 current_dir = os.getcwd()
 
 # Relative path to the Poppler bin directory within the project
-poppler_rel_path = r'Release-24.02.0-0\poppler-24.02.0\Library\bin'
-tesseract_rel_path = r'Tesseract-OCR'
+# poppler_rel_path = r'Release-24.02.0-0\poppler-24.02.0\Library\bin'
+# tesseract_rel_path = r'Tesseract-OCR'
 
-# Construct the absolute path to the Poppler bin directory
-poppler_abs_path = os.path.join(current_dir, poppler_rel_path)
-tesseract_abs_path = os.path.join(current_dir, tesseract_rel_path)
+# # Construct the absolute path to the Poppler bin directory
+# poppler_abs_path = os.path.join(current_dir, poppler_rel_path)
+# tesseract_abs_path = os.path.join(current_dir, tesseract_rel_path)
 
-# Add Poppler bin directory to the PATH environment variable
-os.environ['PATH'] += os.pathsep + poppler_abs_path
-os.environ['PATH'] += os.pathsep + tesseract_abs_path
+# # Add Poppler bin directory to the PATH environment variable
+# os.environ['PATH'] += os.pathsep + poppler_abs_path
+# os.environ['PATH'] += os.pathsep + tesseract_abs_path
 
 
 def extract_images(source_pdf_path):
@@ -90,7 +90,8 @@ def read_config(config_file_path):
 
     with open(config_file_path, 'r', encoding='utf-8') as f:
         config.read_file(f)
-
+    input_path = config['Files']['INPUT']
+    output_path = config['Files']['OUTPUT']
     text = {}
     loc = {}
     for key in config['OCR']:
@@ -107,17 +108,16 @@ def read_config(config_file_path):
             raise ValueError(f"Unexpected key '{key}' in 'OCR' section. "
                              "Expected keys to start with 'Text'.")
 
-    return text, loc
+    return input_path,output_path,text, loc
 
 
 def main():
-    # Get a list of all files in the folder
-    input_folder = r"Firm1/Cases"
-    output_path = r"Firm1/Out"
     config_file_path = "Sample.cfg"
+    input_folder,output_path, text_dict, loc_dict = read_config(config_file_path)
+    
 
     if os.path.exists(input_folder) and os.path.exists(output_path):
-        print("Folder exists!")
+        print("Folder exists!",input_folder, output_path)
     else:
         print("Folder does not exist or path is incorrect.")
     files_in_folder = os.listdir(input_folder)
@@ -129,7 +129,7 @@ def main():
         # Find defendant name
         defendant_id, file_extension = pdf.split('.')
 
-        text_dict, loc_dict = read_config(config_file_path)
+        
         images = extract_images(source_pdf_path)
         subdocuments = {}
 
@@ -143,9 +143,6 @@ def main():
 
         # Split and save the pdf in outputs folder
         save_documents(reduce_subdocuments, source_pdf_path, defendant_id, output_path)
-
-
-
 
 if __name__ == "__main__":
     main()
