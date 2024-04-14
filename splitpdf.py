@@ -1,6 +1,7 @@
 import re
 import os
 import sys
+import time
 
 # Imports for Splitting PDF
 import configparser
@@ -162,7 +163,13 @@ def display_completion():
 
 def next_function():
     # Call the next function in your main script
+    start_time = time.time()
     main()
+
+    # Calculate the elapsed time
+    elapsed_time = time.time() - start_time
+    print(f"Elapsed time: {elapsed_time:.6f} seconds")
+    
     display_completion()
 
 # ############## Functions for PDF Handling #######################
@@ -268,6 +275,8 @@ def main():
         print("Folder does not exist or path is incorrect.")
     files_in_folder = os.listdir(input_folder)
     pdf_files = [file for file in files_in_folder if file.lower().endswith('.pdf')]
+
+    print("Number of PDF Files: ", len(pdf_files))
 
     for pdf in pdf_files:
         source_pdf_path = os.path.join(input_folder, pdf)
