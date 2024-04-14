@@ -1,111 +1,151 @@
-import tkinter as tk
-from tkinter import filedialog, messagebox
+import re
+import configparser
+from PIL import Image, ImageDraw
+from pytesseract import Output, image_to_data
+import pdf2image
+from PyPDF2 import PdfReader, PdfWriter
+import os
+import time
+current_dir = os.getcwd()
 
-# Global variables
-input_path = ''
-output_path = ''
-config_path = ''
+# Relative path to the Poppler bin directory within the project
+poppler_rel_path = r'Release-24.02.0-0\poppler-24.02.0\Library\bin'
+tesseract_rel_path = r'Tesseract-OCR'
 
+# Construct the absolute path to the Poppler bin directory
+poppler_abs_path = os.path.join(current_dir, poppler_rel_path)
+tesseract_abs_path = os.path.join(current_dir, tesseract_rel_path)
 
-def select_input_folder():
-    global input_path
-    input_path = filedialog.askdirectory()
-    input_folder_var.set(input_path)
-
-
-def select_output_folder():
-    global output_path
-    output_path = filedialog.askdirectory()
-    output_folder_var.set(output_path)
-
-
-def select_config_file():
-    global config_path
-    config_path = filedialog.askopenfilename(
-        filetypes=[('Config Files', '*.cfg')])
-    config_file_var.set(config_path)
+# Add Poppler bin directory to the PATH environment variable
+os.environ['PATH'] += os.pathsep + poppler_abs_path
+os.environ['PATH'] += os.pathsep + tesseract_abs_path
 
 
-def split_pdf():
-    if not input_path or not output_path or not config_path:
-        messagebox.showwarning(
-            'Warning', 'Please select input folder, output folder, and config file.')
-        return
+def extract_images(source_pdf_path):
+    images = pdf2image.convert_from_path(source_pdf_path, dpi=400)
+    return images
 
-    # Read the config file with UTF-8 encoding
-    import configparser
+
+def run_OCR(image, search_area):
+    # search_area: (top_left_x, top_left_y, bottom_right_x, bottom_right_y)
+    cropped_im = image.crop(tuple(search_area))
+    ocr_dict = image_to_data(cropped_im, lang='eng', output_type=Output.DICT)
+    return ocr_dict['text']
+
+# Check what sub-document this page belongs to, and return the document name
+
+
+def find_subDocument(image, text_dict, loc_dict):
+    for key in text_dict.keys():
+        image_data = run_OCR(image, loc_dict[f'loc{key[-1]}'])
+        for word in image_data:
+            if text_dict[key].lower() == word.lower():
+                return text_dict[key]
+    return None
+
+def reduce_subdocument(subdocuments):
+    reduced_data = {}
+    current_key = None
+    for key, value in subdocuments.items():
+        if value is not None:
+            if value in reduced_data:
+                reduced_data[value].append(key)
+            else:
+                reduced_data[value] = [key]
+            current_key = value
+        elif current_key is not None:
+            if current_key in reduced_data:
+                reduced_data[current_key].append(key)
+            else:
+                reduced_data[current_key] = [key]
+
+    return reduced_data
+
+def save_documents(reduce_subdocuments, source_pdf_path, defendant_id, output_path):
+    with open(source_pdf_path, 'rb') as input_file:
+        pdf_reader = PdfReader(input_file)
+        
+        for documents, page_list in reduce_subdocuments.items():
+            pdf_writer = PdfWriter()
+
+            for page_num in page_list:
+                pdf_writer.add_page(pdf_reader.pages[page_num])
+            
+            output_file_name = os.path.join(output_path, f"{defendant_id}_{documents}.pdf")
+            with open(output_file_name, 'wb') as output_file:
+                pdf_writer.write(output_file)
+
+
+def preview_image(image, search_area):
+    # Draw a rectangle on the image
+    draw = ImageDraw.Draw(image)
+    draw.rectangle(search_area, outline="blue", width=3)
+
+    # Display the image with the drawn rectangle (optional)
+    image.show()
+
+
+def read_config(config_file_path):
     config = configparser.ConfigParser()
-    with open(config_path, 'r', encoding='utf-8') as f:
+
+    with open(config_file_path, 'r', encoding='utf-8') as f:
         config.read_file(f)
 
-    input_folder = config['Files']['INPUT']
-    output_folder = config['Files']['OUTPUT']
-    OCR_Text1 = config['OCR']['Text1']
-    OCR_Loc1 = config['OCR']['Loc1']
-    OCR_Text2 = config['OCR']['Text2']
-    OCR_Loc2 = config['OCR']['Loc2']
-    OCR_Text3 = config['OCR']['Text3']
-    OCR_Loc3 = config['OCR']['Loc3']
+    text = {}
+    loc = {}
+    for key in config['OCR']:
+        if key.startswith('text'):  # Check if key starts with "Text"
+            text_str = config.get('OCR', key)
+            text[key] = re.sub(r'\W+', '', text_str)
 
-    print("Input folder selected: ", input_folder)
-    print("Output folder selected: ", output_folder)
-    print("OCR_Text1: ",  OCR_Text1)
-    print("OCR_Loc1: ",   OCR_Loc1)
-    print("OCR_Text2: ", OCR_Text2)
-    print("OCR_Loc2: ",   OCR_Loc2)
-    print("OCR_Text3: ", OCR_Text2)
-    print("OCR_Loc3: ",   OCR_Loc3)
+        elif key.startswith('loc'):
+            location_str = config.get('OCR', key)
+            location = [int(x) for x in location_str.split(',')]
+            loc[key] = location
 
-    # Continue with the rest of the function...
+        else:
+            raise ValueError(f"Unexpected key '{key}' in 'OCR' section. "
+                             "Expected keys to start with 'Text'.")
+
+    return text, loc
 
 
-# GUI setup
-root = tk.Tk()
-root.title('PDF Splitter')
-root.geometry('800x800')  # Set initial width and height of the window
+def main():
+    # Get a list of all files in the folder
+    input_folder = r"Firm1/Cases"
+    output_path = r"Firm1/Out"
+    config_file_path = "Sample.cfg"
 
-# Add padding to the window
-padding = 20
-root.configure(padx=padding, pady=padding)
+    if os.path.exists(input_folder) and os.path.exists(output_path):
+        print("Folder exists!")
+    else:
+        print("Folder does not exist or path is incorrect.")
+    files_in_folder = os.listdir(input_folder)
+    pdf_files = [file for file in files_in_folder if file.lower().endswith('.pdf')]
 
-# Set background colors
-bg_color = '#f0f0f0'  # Light gray
-entry_bg_color = '#ffffff'  # White
+    for pdf in pdf_files:
+        source_pdf_path = os.path.join(input_folder, pdf)
 
-input_folder_var = tk.StringVar()
-output_folder_var = tk.StringVar()
-config_file_var = tk.StringVar()
+        # Find defendant name
+        defendant_id, file_extension = pdf.split('.')
 
-# Input Folder
-tk.Label(root, text='Input Folder:', bg=bg_color).pack()
-input_folder_entry = tk.Entry(
-    root, textvariable=input_folder_var, state='disabled', bg=entry_bg_color)
-input_folder_entry.pack(fill=tk.X, padx=padding, pady=(0, padding))
+        text_dict, loc_dict = read_config(config_file_path)
+        images = extract_images(source_pdf_path)
+        subdocuments = {}
 
-tk.Button(root, text='Select Input Folder', command=select_input_folder).pack(
-    fill=tk.X, padx=padding, pady=(0, padding))
+        #  Process each page of PDF file and find the document name on each page
+        for page_no, image in enumerate(images):
+            document_name = find_subDocument(image, text_dict, loc_dict)
+            subdocuments[page_no] = document_name
+                
+        # Group pages by  their corresponding documents name
+        reduce_subdocuments = reduce_subdocument(subdocuments)
 
-# Output Folder
-tk.Label(root, text='Output Folder:', bg=bg_color).pack()
-output_folder_entry = tk.Entry(
-    root, textvariable=output_folder_var, state='disabled', bg=entry_bg_color)
-output_folder_entry.pack(fill=tk.X, padx=padding, pady=(0, padding))
+        # Split and save the pdf in outputs folder
+        save_documents(reduce_subdocuments, source_pdf_path, defendant_id, output_path)
 
-tk.Button(root, text='Select Output Folder', command=select_output_folder).pack(
-    fill=tk.X, padx=padding, pady=(0, padding))
 
-# Config File
-tk.Label(root, text='Config File:', bg=bg_color).pack()
-config_file_entry = tk.Entry(
-    root, textvariable=config_file_var, state='disabled', bg=entry_bg_color)
-config_file_entry.pack(fill=tk.X, padx=padding, pady=(0, padding))
 
-tk.Button(root, text='Select Config File', command=select_config_file).pack(
-    fill=tk.X, padx=padding, pady=(0, padding))
 
-# Split PDF Button
-split_button = tk.Button(root, text='Split PDF',
-                         command=split_pdf, bg='lightgreen')
-split_button.pack(fill=tk.X, padx=padding, pady=(padding, 0))
-
-root.mainloop()
+if __name__ == "__main__":
+    main()
